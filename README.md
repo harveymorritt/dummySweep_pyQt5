@@ -6,3 +6,6 @@ Test GUI for JV sweeps, set up with a "dummy sweep" function to emulate a source
 # Method types
 
 enforcer[ClusterName]
+e.g. enforcerSweepPropertyCluster
+
+Watches to make sure values are sensible,  otherwise warns user. e.g. "Are you sure you want to run a 100 volt scan?" kind of thing.
