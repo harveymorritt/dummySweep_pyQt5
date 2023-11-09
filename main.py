@@ -18,7 +18,8 @@ class TaskWaitForTwoSeconds(QRunnable):
 class MeasurementHandler(QObject):
     sendVocValue = pyqtSignal(float)
     sendSweepPoint = pyqtSignal(ndarray)
-    finaliseData = pyqtSignal()
+    measurementStarted = pyqtSignal()
+    measurementFinished = pyqtSignal()
 
     def __init__(self, mutexMeasurement):
         super().__init__()
@@ -37,7 +38,10 @@ class MeasurementHandler(QObject):
 
     def measureSweep(self):
         self.mutexMeasurement.lock()
+        
         if self.measurementValid:
+            self.measurementStarted.emit()
+
             sweepPoint = empty((1, 2))
             for i in range (1, 101):
                 time.sleep(0.02)
@@ -45,8 +49,11 @@ class MeasurementHandler(QObject):
                 sweepPoint[0, 1] = i * (1 + ((1-random.rand()*2))*0.1)
                 print(sweepPoint[0])
                 self.sendSweepPoint.emit(sweepPoint.copy())
-            self.finaliseData.emit()
+            
+            self.measurementFinished.emit()
+
         self.mutexMeasurement.unlock()
+
 class DataHandler(QObject):
     updateGraph = pyqtSignal(ndarray)
 
@@ -78,15 +85,12 @@ class DataHandler(QObject):
     def sendUpdateGraphSignal(self):
         # It is possible for sendUpdateGraphSignal() to be queued by the self.timer.timeout event AS finaliseArray() is running, resulting the working array being cleared before sendUpdateGraphSignal() runs.
         # We can never be sure there isn't a signal emission already in the event queue waiting to be processed which will call a method to access self.workingArray AFTER it has been cleared by finaliseArray().
-        # Hence, we check if there is valid data to display, before sending it to the Main GUI Thread. 
+        # Hence, we check if there is valid data to display, before sending it to the Main GUI Thread.
         if self.workingArray:
             _workingArray = vstack(self.workingArray)
             self.updateGraph.emit(_workingArray)
 
-class MainWindow(QMainWindow):
-    startMeasureVOCSignal = pyqtSignal()
-    startMeasureSweepSignal = pyqtSignal()
-    
+class MainWindow(QMainWindow):    
     def __init__(self):
         super().__init__()
 
@@ -130,7 +134,6 @@ class MainWindow(QMainWindow):
         self.THREAD_Measurement = QThread()
         self.measurementHandler = MeasurementHandler(self.mutexMeasurement)
         self.measurementHandler.moveToThread(self.THREAD_Measurement)
-        self.measurementHandler.sendVocValue.connect(self.updateVocValue, Qt.QueuedConnection)
 
         self.THREAD_Measurement.start()
 
@@ -138,18 +141,23 @@ class MainWindow(QMainWindow):
         self.THREAD_Data = QThread()
         self.dataHandler = DataHandler()
         self.dataHandler.moveToThread(self.THREAD_Data)
-        self.dataHandler.updateGraph.connect(self.plotData, Qt.QueuedConnection)
         self.THREAD_Data.start()
 
-        # Cross-Thread Connections:
+        # Measurement Handler to Data Handler:
         self.measurementHandler.sendSweepPoint.connect(self.dataHandler.buildArrayFromSweepPoints, Qt.QueuedConnection)
-        self.measurementHandler.finaliseData.connect(self.dataHandler.finaliseArray, Qt.QueuedConnection)
+        self.measurementHandler.measurementFinished.connect(self.dataHandler.finaliseArray, Qt.QueuedConnection)
 
-        # Main GUI Connections
-        self.controlStartButton.clicked.connect(self.startMeasureSweep, Qt.QueuedConnection) # Send to local method, so we can check mutex state in main gui thread BEFORE we send anything to measurement thread
-        self.startMeasureSweepSignal.connect(self.measurementHandler.measureSweep, Qt.QueuedConnection) # If local method detects that the mutex is unlocked, it will emit signal to start measurement
-        self.controlMeasureVoc.clicked.connect(self.startMeasureVOC, Qt.QueuedConnection) 
-        self.startMeasureVOCSignal.connect(self.measurementHandler.measureVOC, Qt.QueuedConnection) 
+        # Measurement Handler to Main GUI Thread
+        self.measurementHandler.sendVocValue.connect(self.updateVocValue, Qt.QueuedConnection)
+        self.measurementHandler.measurementStarted.connect(self.disableStartMeasurementButton, Qt.QueuedConnection)
+        self.measurementHandler.measurementFinished.connect(self.enableStartMeasurementButton, Qt.QueuedConnection)
+
+        # Data Handler to Main GUI Thread
+        self.dataHandler.updateGraph.connect(self.plotData, Qt.QueuedConnection)
+
+        # Main GUI Self Connections
+        self.controlStartButton.clicked.connect(self.measurementHandler.measureSweep, Qt.QueuedConnection)
+        self.controlMeasureVoc.clicked.connect(self.measurementHandler.measureVOC, Qt.QueuedConnection) 
 
     def createSweepSettings(self):
 
@@ -237,7 +245,7 @@ class MainWindow(QMainWindow):
     @pyqtSlot(ndarray)
     def plotData(self, dataToPlot):
         self.figure.clear()
-
+        
         ax = self.figure.add_subplot(111)
         ax.plot(dataToPlot[:,0], dataToPlot[:,1], "*-")
         self.canvas.draw()
@@ -248,20 +256,14 @@ class MainWindow(QMainWindow):
         self.THREAD_Measurement.wait()
         self.THREAD_Data.quit()
         self.THREAD_Data.wait()
-
-    @pyqtSlot()
-    def startMeasureVOC(self):
-        if self.mutexMeasurement.tryLock():
-            self.startMeasureVOCSignal.emit()
-        else:
-            print("Measurement Active")
     
     @pyqtSlot()
-    def startMeasureSweepSignal(self):
-        if self.mutexMeasurement.tryLock():
-            self.startMeasureSweepSignal.emit()
-        else:
-            print("Measurement Active")
+    def disableStartMeasurementButton(self):
+        self.controlStartButton.setDisabled(True)
+    
+    @pyqtSlot()
+    def enableStartMeasurementButton(self):
+        self.controlStartButton.setEnabled(True)
 
 def main():
     app = QApplication(sys.argv)
