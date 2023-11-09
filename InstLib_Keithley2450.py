@@ -59,10 +59,11 @@ class MeasurementThread():
         # (ESR). This instructs the instrument to signal the computer via SRQ for this specific event.
         self.instrument.write("*SRE 32")
 
+        # ELI5
         # *ESE 1: "Hey instrument, put a checkmark in your log when you've finished what I asked you to do."
         # *SRE 32: "And when you put that checkmark, raise your hand so I know to look at your log and see what you've done."
 
-        # Clears event registers and queues
+        # Clears event registers and queues.
         self.instrument.write("*CLS")
 
         # Set read back on for voltage and current.

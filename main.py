@@ -5,6 +5,7 @@ import time
 from PyQt5.QtCore import *
 from PyQt5.QtWidgets import *
 from matplotlib.figure import Figure
+from numpy import *
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
@@ -13,6 +14,72 @@ class TaskWaitForTwoSeconds(QRunnable):
     def run(self):
         print("Waiting")
         time.sleep(2)
+
+class MeasurementHandler(QObject):
+    sendVocValue = pyqtSignal(float)
+    sendSweepPoint = pyqtSignal(ndarray)
+    finaliseData = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+        self.validState = True
+        self.measurementValid = True
+
+    @pyqtSlot()
+    def measureVOC(self):
+        if self.validState:
+            dataPoint = random.rand()
+            self.sendVocValue.emit(dataPoint)
+        else:
+            pass
+            ### Return message about state not being measurement valid ###
+
+    def startMeasurement(self):
+        if self.measurementValid:
+            sweepPoint = empty((1, 2))
+            for i in range (1, 101):
+                time.sleep(0.02)
+                sweepPoint[0, 0] = i
+                sweepPoint[0, 1] = i * (1 + ((1-random.rand()*2))*0.1)
+                print(sweepPoint[0])
+                self.sendSweepPoint.emit(sweepPoint.copy())
+            self.finaliseData.emit()
+
+class DataHandler(QObject):
+    updateGraph = pyqtSignal(ndarray)
+
+    def __init__(self):
+        super().__init__()
+        
+        self.workingArray = []
+        
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.sendUpdateGraphSignal, Qt.QueuedConnection)
+
+    @pyqtSlot(ndarray)
+    def buildArrayFromSweepPoints(self, receivedSweepPoint):
+        if not self.timer.isActive():
+            self.timer.start(100)
+        
+        self.workingArray.append(receivedSweepPoint)
+    
+    @pyqtSlot()
+    def finaliseArray(self):
+        self.timer.stop()
+        self.sendUpdateGraphSignal()
+        _measurementArray = vstack(self.workingArray)
+        self.workingArray = []
+    
+    @pyqtSlot()
+    def sendUpdateGraphSignal(self):
+        # Stupid horrible hack. FIX THIS. Why does it sometimes return an error when no try and except? Something to do with Qt.QueuedConnection, working array being cleared before sendUpdateGraphSignal is run?
+        try:
+            _workingArray = vstack(self.workingArray)
+            self.updateGraph.emit(_workingArray)
+        except:
+            pass
+
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -38,10 +105,6 @@ class MainWindow(QMainWindow):
         self.createMeasurementSettings()
         self.createMeasurementControls()
 
-        # Connections
-        self.controlStartButton.clicked.connect(self.plotData)
-        self.controlMeasureVoc.clicked.connect(self.waitForTenSeconds)
-
         # Main layout
         mainLayout = QGridLayout()
         mainLayout.addWidget(self.SweepSettings, 0, 0)
@@ -54,6 +117,29 @@ class MainWindow(QMainWindow):
         mainWidget.setLayout(mainLayout)
         self.setCentralWidget(mainWidget)
         self.show()
+
+        # Measurement Thread
+        self.THREAD_Measurement = QThread()
+        self.measurementHandler = MeasurementHandler()
+        self.measurementHandler.moveToThread(self.THREAD_Measurement)
+        self.measurementHandler.sendVocValue.connect(self.updateVocValue, Qt.QueuedConnection)
+
+        self.THREAD_Measurement.start()
+
+        # Data Handler Thread
+        self.THREAD_Data = QThread()
+        self.dataHandler = DataHandler()
+        self.dataHandler.moveToThread(self.THREAD_Data)
+        self.dataHandler.updateGraph.connect(self.plotData, Qt.QueuedConnection)
+        self.THREAD_Data.start()
+
+        # Cross-Thread Connections:
+        self.measurementHandler.sendSweepPoint.connect(self.dataHandler.buildArrayFromSweepPoints, Qt.QueuedConnection)
+        self.measurementHandler.finaliseData.connect(self.dataHandler.finaliseArray, Qt.QueuedConnection)
+
+        # Main GUI Connections
+        self.controlStartButton.clicked.connect(self.measurementHandler.startMeasurement, Qt.QueuedConnection)
+        self.controlMeasureVoc.clicked.connect(self.measurementHandler.measureVOC, Qt.QueuedConnection)
 
     def createSweepSettings(self):
 
@@ -123,31 +209,42 @@ class MainWindow(QMainWindow):
         self.MeasurementControls = QGroupBox()
         
         self.controlStartButton = QPushButton("Start Measurement")
-        self.controlMeasureVoc = QPushButton("10 Second Wait")
+        self.controlMeasureVoc = QPushButton("Measure Voc")
+        self.labelVocValue = QLabel("Voc: NaN")
 
         self.layoutMeasurementControls = QHBoxLayout()
         self.layoutMeasurementControls.addWidget(self.controlStartButton)
         self.layoutMeasurementControls.addWidget(self.controlMeasureVoc)
+        self.layoutMeasurementControls.addWidget(self.labelVocValue)
 
         self.MeasurementControls.setLayout(self.layoutMeasurementControls)
 
-    def plotData(self):
+    @pyqtSlot(float)
+    def updateVocValue(self, value):
+        self.valueVoc = value
+        self.valueVoc = int(round(self.valueVoc, 3) * 1000)
+        self.valueVoc = str(self.valueVoc)
+        self.labelVocValue.setText("Voc: " + self.valueVoc + " mV")
 
-        data = [random.random() for i in range(10)]
+    @pyqtSlot(ndarray)
+    def plotData(self, dataToPlot):
+        self.figure.clear()
 
         ax = self.figure.add_subplot(111)
-        ax.clear()
-        ax.plot(data, "*-")
+        ax.plot(dataToPlot, "*-")
         self.canvas.draw()
 
-    def waitForTenSeconds(self):
-        task = TaskWaitForTwoSeconds()
-        self.threadpool.start(task)
-
+    @pyqtSlot()    
+    def shutdown(self):
+        self.THREAD_Measurement.quit()
+        self.THREAD_Measurement.wait()
+        self.THREAD_Data.quit()
+        self.THREAD_Data.wait()
 
 def main():
     app = QApplication(sys.argv)
     window = MainWindow()
+    app.aboutToQuit.connect(window.shutdown)
     app.exec()
 
 main()
