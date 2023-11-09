@@ -20,8 +20,9 @@ class MeasurementHandler(QObject):
     sendSweepPoint = pyqtSignal(ndarray)
     finaliseData = pyqtSignal()
 
-    def __init__(self):
+    def __init__(self, mutexMeasurement):
         super().__init__()
+        self.mutexMeasurement = mutexMeasurement
         self.validState = True
         self.measurementValid = True
 
@@ -34,7 +35,8 @@ class MeasurementHandler(QObject):
             pass
             ### Return message measurement not being valid ###
 
-    def startMeasurement(self):
+    def measureSweep(self):
+        self.mutexMeasurement.lock()
         if self.measurementValid:
             sweepPoint = empty((1, 2))
             for i in range (1, 101):
@@ -44,7 +46,7 @@ class MeasurementHandler(QObject):
                 print(sweepPoint[0])
                 self.sendSweepPoint.emit(sweepPoint.copy())
             self.finaliseData.emit()
-
+        self.mutexMeasurement.unlock()
 class DataHandler(QObject):
     updateGraph = pyqtSignal(ndarray)
 
@@ -82,6 +84,9 @@ class DataHandler(QObject):
             self.updateGraph.emit(_workingArray)
 
 class MainWindow(QMainWindow):
+    startMeasureVOCSignal = pyqtSignal()
+    startMeasureSweepSignal = pyqtSignal()
+    
     def __init__(self):
         super().__init__()
 
@@ -118,9 +123,12 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(mainWidget)
         self.show()
 
+        # Mutex objects
+        self.mutexMeasurement = QMutex()
+
         # Measurement Thread
         self.THREAD_Measurement = QThread()
-        self.measurementHandler = MeasurementHandler()
+        self.measurementHandler = MeasurementHandler(self.mutexMeasurement)
         self.measurementHandler.moveToThread(self.THREAD_Measurement)
         self.measurementHandler.sendVocValue.connect(self.updateVocValue, Qt.QueuedConnection)
 
@@ -138,8 +146,10 @@ class MainWindow(QMainWindow):
         self.measurementHandler.finaliseData.connect(self.dataHandler.finaliseArray, Qt.QueuedConnection)
 
         # Main GUI Connections
-        self.controlStartButton.clicked.connect(self.measurementHandler.startMeasurement, Qt.QueuedConnection)
-        self.controlMeasureVoc.clicked.connect(self.measurementHandler.measureVOC, Qt.QueuedConnection)
+        self.controlStartButton.clicked.connect(self.startMeasureSweep, Qt.QueuedConnection) # Send to local method, so we can check mutex state in main gui thread BEFORE we send anything to measurement thread
+        self.startMeasureSweepSignal.connect(self.measurementHandler.measureSweep, Qt.QueuedConnection) # If local method detects that the mutex is unlocked, it will emit signal to start measurement
+        self.controlMeasureVoc.clicked.connect(self.startMeasureVOC, Qt.QueuedConnection) 
+        self.startMeasureVOCSignal.connect(self.measurementHandler.measureVOC, Qt.QueuedConnection) 
 
     def createSweepSettings(self):
 
@@ -221,17 +231,15 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot(float)
     def updateVocValue(self, value):
-        self.valueVoc = value
-        self.valueVoc = int(round(self.valueVoc, 3) * 1000)
-        self.valueVoc = str(self.valueVoc)
-        self.labelVocValue.setText("Voc: " + self.valueVoc + " mV")
+        self.valueVoc = value * 1000
+        self.labelVocValue.setText(f"Voc: {value:.3f} mV")
 
     @pyqtSlot(ndarray)
     def plotData(self, dataToPlot):
         self.figure.clear()
 
         ax = self.figure.add_subplot(111)
-        ax.plot(dataToPlot, "*-")
+        ax.plot(dataToPlot[:,0], dataToPlot[:,1], "*-")
         self.canvas.draw()
 
     @pyqtSlot()    
@@ -240,6 +248,20 @@ class MainWindow(QMainWindow):
         self.THREAD_Measurement.wait()
         self.THREAD_Data.quit()
         self.THREAD_Data.wait()
+
+    @pyqtSlot()
+    def startMeasureVOC(self):
+        if self.mutexMeasurement.tryLock():
+            self.startMeasureVOCSignal.emit()
+        else:
+            print("Measurement Active")
+    
+    @pyqtSlot()
+    def startMeasureSweepSignal(self):
+        if self.mutexMeasurement.tryLock():
+            self.startMeasureSweepSignal.emit()
+        else:
+            print("Measurement Active")
 
 def main():
     app = QApplication(sys.argv)
