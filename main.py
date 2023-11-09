@@ -32,7 +32,7 @@ class MeasurementHandler(QObject):
             self.sendVocValue.emit(dataPoint)
         else:
             pass
-            ### Return message about state not being measurement valid ###
+            ### Return message measurement not being valid ###
 
     def startMeasurement(self):
         if self.measurementValid:
@@ -52,7 +52,7 @@ class DataHandler(QObject):
         super().__init__()
         
         self.workingArray = []
-        
+
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.sendUpdateGraphSignal, Qt.QueuedConnection)
 
@@ -66,20 +66,20 @@ class DataHandler(QObject):
     @pyqtSlot()
     def finaliseArray(self):
         self.timer.stop()
-        self.sendUpdateGraphSignal()
+
         _measurementArray = vstack(self.workingArray)
+        self.updateGraph.emit(_measurementArray)
+
         self.workingArray = []
     
     @pyqtSlot()
     def sendUpdateGraphSignal(self):
-        # Stupid horrible hack. FIX THIS. Why does it sometimes return an error when no try and except? Something to do with Qt.QueuedConnection, working array being cleared before sendUpdateGraphSignal is run?
-        try:
+        # It is possible for sendUpdateGraphSignal() to be queued by the self.timer.timeout event AS finaliseArray() is running, resulting the working array being cleared before sendUpdateGraphSignal() runs.
+        # We can never be sure there isn't a signal emission already in the event queue waiting to be processed which will call a method to access self.workingArray AFTER it has been cleared by finaliseArray().
+        # Hence, we check if there is valid data to display, before sending it to the Main GUI Thread. 
+        if self.workingArray:
             _workingArray = vstack(self.workingArray)
             self.updateGraph.emit(_workingArray)
-        except:
-            pass
-
-
 
 class MainWindow(QMainWindow):
     def __init__(self):
