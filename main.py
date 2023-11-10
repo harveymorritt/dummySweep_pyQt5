@@ -6,6 +6,7 @@ from PyQt5.QtCore import *
 from PyQt5.QtWidgets import *
 from matplotlib.figure import Figure
 from numpy import *
+from datetime import datetime
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
@@ -18,8 +19,11 @@ class TaskWaitForTwoSeconds(QRunnable):
 class MeasurementHandler(QObject):
     sendVocValue = pyqtSignal(float)
     sendSweepPoint = pyqtSignal(ndarray)
-    measurementStarted = pyqtSignal()
-    measurementFinished = pyqtSignal()
+    measurementSweepStarted = pyqtSignal()
+    measurementSweepFinished = pyqtSignal()
+    measurementVOCStarted = pyqtSignal()
+    measurementVOCFinished = pyqtSignal()
+    sendConsoleUpdateSignal = pyqtSignal(str)
 
     def __init__(self, mutexMeasurement):
         super().__init__()
@@ -29,30 +33,31 @@ class MeasurementHandler(QObject):
 
     @pyqtSlot()
     def measureVOC(self):
+        self.measurementVOCStarted.emit()
         if self.validState:
-            dataPoint = random.rand()
-            self.sendVocValue.emit(dataPoint)
+            _dataPoint = random.rand()
+            self.sendVocValue.emit(_dataPoint)
         else:
             pass
             ### Return message measurement not being valid ###
+        self.measurementVOCFinished.emit()
+        self.sendConsoleUpdateSignal.emit(f"Voc Measurement Completed\nValue: {_dataPoint:.3f} V")
 
     def measureSweep(self):
+        self.measurementSweepStarted.emit()
         self.mutexMeasurement.lock()
         
         if self.measurementValid:
-            self.measurementStarted.emit()
-
-            sweepPoint = empty((1, 2))
+            _sweepPoint = empty((1, 2))
             for i in range (1, 101):
                 time.sleep(0.02)
-                sweepPoint[0, 0] = i
-                sweepPoint[0, 1] = i * (1 + ((1-random.rand()*2))*0.1)
-                print(sweepPoint[0])
-                self.sendSweepPoint.emit(sweepPoint.copy())
-            
-            self.measurementFinished.emit()
+                _sweepPoint[0, 0] = i
+                _sweepPoint[0, 1] = i * (1 + ((1-random.rand()*2))*0.1)
+                print(_sweepPoint[0])
+                self.sendSweepPoint.emit(_sweepPoint.copy()) # .copy() otherwise the for loop "catches up" with the emit signal, and you end up writing over the data being emitted.
 
         self.mutexMeasurement.unlock()
+        self.measurementSweepFinished.emit()
 
 class DataHandler(QObject):
     updateGraph = pyqtSignal(ndarray)
@@ -68,7 +73,7 @@ class DataHandler(QObject):
     @pyqtSlot(ndarray)
     def buildArrayFromSweepPoints(self, receivedSweepPoint):
         if not self.timer.isActive():
-            self.timer.start(100)
+            self.timer.start(333)
         
         self.workingArray.append(receivedSweepPoint)
     
@@ -90,7 +95,7 @@ class DataHandler(QObject):
             _workingArray = vstack(self.workingArray)
             self.updateGraph.emit(_workingArray)
 
-class MainWindow(QMainWindow):    
+class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
@@ -105,21 +110,38 @@ class MainWindow(QMainWindow):
             warningThreads.setText("You are running this program on a machine with only 1 thread! This program makes use of mulithreading, please run on a machine with at least 2 threads or unexpected behaviour may occur!")
             warningThreads.exec_()
 
-        # Setting up figure
-        self.figure = Figure()
-        self.canvas = FigureCanvas(self.figure)
-
         # Sub-widgets
         self.createSweepSettings()
         self.createMeasurementSettings()
         self.createMeasurementControls()
+
+        # Graph Tab Layout
+        self.graphTab = QWidget()
+        self.figure = Figure()
+        self.canvas = FigureCanvas(self.figure)
+        graphLayout = QVBoxLayout()
+        graphLayout.addWidget(self.canvas)
+        self.graphTab.setLayout(graphLayout)
+
+        # Console Tab Layout
+        self.consoleTab = QWidget()
+        self.console = QPlainTextEdit(self.consoleTab)
+        self.console.setReadOnly(True)
+        self.consoleLayout = QVBoxLayout()
+        self.consoleLayout.addWidget(self.console)
+        self.consoleTab.setLayout(self.consoleLayout)
+
+        # Tab layout (with graph and console)
+        self.tabControl = QTabWidget()
+        self.tabControl.addTab(self.graphTab, "Graph")
+        self.tabControl.addTab(self.consoleTab, "Console")
 
         # Main layout
         mainLayout = QGridLayout()
         mainLayout.addWidget(self.SweepSettings, 0, 0)
         mainLayout.addWidget(self.MeasurementSettings, 0, 1)
         mainLayout.addWidget(self.MeasurementControls, 1, 0, 1, 2)
-        mainLayout.addWidget(self.canvas, 0, 2, 2, 2)
+        mainLayout.addWidget(self.tabControl, 0, 2, 2, 2)
 
         # Building and showing main widget
         mainWidget = QWidget()
@@ -145,12 +167,15 @@ class MainWindow(QMainWindow):
 
         # Measurement Handler to Data Handler:
         self.measurementHandler.sendSweepPoint.connect(self.dataHandler.buildArrayFromSweepPoints, Qt.QueuedConnection)
-        self.measurementHandler.measurementFinished.connect(self.dataHandler.finaliseArray, Qt.QueuedConnection)
+        self.measurementHandler.measurementSweepFinished.connect(self.dataHandler.finaliseArray, Qt.QueuedConnection)
 
         # Measurement Handler to Main GUI Thread
         self.measurementHandler.sendVocValue.connect(self.updateVocValue, Qt.QueuedConnection)
-        self.measurementHandler.measurementStarted.connect(self.disableStartMeasurementButton, Qt.QueuedConnection)
-        self.measurementHandler.measurementFinished.connect(self.enableStartMeasurementButton, Qt.QueuedConnection)
+        self.measurementHandler.measurementSweepStarted.connect(self.disableStartMeasurementButtons, Qt.QueuedConnection)
+        self.measurementHandler.measurementSweepFinished.connect(self.enableStartMeasurementButtons, Qt.QueuedConnection)
+        self.measurementHandler.measurementVOCStarted.connect(self.disableStartMeasurementButtons, Qt.QueuedConnection)
+        self.measurementHandler.measurementVOCStarted.connect(self.enableStartMeasurementButtons, Qt.QueuedConnection)
+        self.measurementHandler.sendConsoleUpdateSignal.connect(self.updateConsole, Qt.QueuedConnection)
 
         # Data Handler to Main GUI Thread
         self.dataHandler.updateGraph.connect(self.plotData, Qt.QueuedConnection)
@@ -240,7 +265,7 @@ class MainWindow(QMainWindow):
     @pyqtSlot(float)
     def updateVocValue(self, value):
         self.valueVoc = value * 1000
-        self.labelVocValue.setText(f"Voc: {value:.3f} mV")
+        self.labelVocValue.setText(f"Voc: {self.valueVoc:.0f} mV")
 
     @pyqtSlot(ndarray)
     def plotData(self, dataToPlot):
@@ -258,12 +283,20 @@ class MainWindow(QMainWindow):
         self.THREAD_Data.wait()
     
     @pyqtSlot()
-    def disableStartMeasurementButton(self):
+    def disableStartMeasurementButtons(self):
         self.controlStartButton.setDisabled(True)
+        self.controlMeasureVoc.setDisabled(True)
     
     @pyqtSlot()
-    def enableStartMeasurementButton(self):
+    def enableStartMeasurementButtons(self):
         self.controlStartButton.setEnabled(True)
+        self.controlMeasureVoc.setEnabled(True)
+    
+    @pyqtSlot(str)
+    def updateConsole(self, message):
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        formatted_message = f"[{timestamp}]:\n{message}\n"
+        self.console.appendPlainText(formatted_message)
 
 def main():
     app = QApplication(sys.argv)
