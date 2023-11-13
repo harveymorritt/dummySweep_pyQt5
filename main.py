@@ -10,6 +10,7 @@ from datetime import datetime
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
+# Test QRunnable
 class TaskWaitForTwoSeconds(QRunnable):
     @pyqtSlot()
     def run(self):
