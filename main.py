@@ -396,7 +396,7 @@ class MainWindow(QMainWindow):
         
         # Analysis variables
         self.inputCellArea.setEnabled(False)
-        self.inputCellName.setEnabled(False)
+        self.inputPower.setEnabled(False)
 
         # Sweep settings
         self.inputStartVoltage.setEnabled(False)
@@ -407,6 +407,10 @@ class MainWindow(QMainWindow):
         # Folder I/O setting
         self.inputFetchFolderPath.setEnabled(False)
         self.inputCellName.setEnabled(False)
+
+        # Insturment settings
+        self.inputFrontOrRearPanel.setEnabled(False)
+        self.inputFourOrTwoWire.setEnabled(False)
     
     
     @pyqtSlot()
@@ -420,7 +424,7 @@ class MainWindow(QMainWindow):
         
         # Analysis variables
         self.inputCellArea.setEnabled(True)
-        self.inputCellName.setEnabled(True)
+        self.inputPower.setEnabled(True)
 
         # Sweep settings
         self.inputStartVoltage.setEnabled(True)
@@ -431,6 +435,10 @@ class MainWindow(QMainWindow):
         # Folder I/O setting
         self.inputFetchFolderPath.setEnabled(True)
         self.inputCellName.setEnabled(True)
+
+        # Insturment settings
+        self.inputFrontOrRearPanel.setEnabled(True)
+        self.inputFourOrTwoWire.setEnabled(True)
     
     
     @pyqtSlot(str)
@@ -452,6 +460,8 @@ class MainWindow(QMainWindow):
         ax = self.figure.add_subplot(111)
         ax.plot(dataToPlot[:,0], dataToPlot[:,1], "kx-")
         ax.grid()
+        ax.set_xlabel("Voltage (V)")
+        ax.set_ylabel("Current (A)")
         self.canvas.draw()
 
     @pyqtSlot()    
