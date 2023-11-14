@@ -46,8 +46,6 @@ class MeasurementHandler(QObject):
 
     @pyqtSlot(np.ndarray)
     def measureSweep(self, sweepSettings):
-        self.sendConsoleUpdateSignal.emit("Sweep Measurement Started")
-        self.measurementSweepStartedSingal.emit()
         self.mutexMeasurement.lock()
 
         _sweepSettings = sweepSettings
@@ -62,6 +60,9 @@ class MeasurementHandler(QObject):
         _q = 1.6e-19
 
         if self.measurementValid:
+            self.sendConsoleUpdateSignal.emit("Sweep Measurement Started")
+            self.measurementSweepStartedSingal.emit()
+
             _sweepPoint = np.empty((1, 2))
             
             _yAxisShift = np.round(0.05+((0.25-0.05)*np.random.rand()), 3)
@@ -80,12 +81,13 @@ class MeasurementHandler(QObject):
                 
                 self.sendSweepPointSignal.emit(_sweepPoint.copy()) # .copy() otherwise the for loop "catches up" with the emit signal, and you end up writing over the data being emitted.    
             self.sendConsoleUpdateSignal.emit("Sweep Measurement Finished")
+            self.measurementSweepFinishedSignal.emit()
+
         
         else:
             pass
             # message about not in valid state
         self.mutexMeasurement.unlock()
-        self.measurementSweepFinishedSignal.emit()
 
 
 
@@ -129,11 +131,26 @@ class DataHandler(QObject):
 
 
 
+class analysisHandler(QObject):
+    def __init__(self):
+        super().__init__()
+        self.cellArea = 0
+        self.PowerIn = 0
+    
+    @pyqtSlot(np.ndarray)
+    def updateAnalysisValues(self):
+        pass
+
+
+
 class MainWindow(QMainWindow):
     startSweepMeasurementSignal = pyqtSignal(np.ndarray)
 
     def __init__(self):
         super().__init__()
+
+        # Measurement flag
+        self.isMeasuring = False # this could be useful, but check if it is actually used
 
         # Setting default path for data analysis
         self.programFolderPath = os.path.abspath(__file__)
@@ -174,10 +191,10 @@ class MainWindow(QMainWindow):
 
         # Measurement Handler to Main GUI Thread
         self.measurementHandler.sendVocValueSignal.connect(self.updateVocValue, Qt.QueuedConnection)
-        self.measurementHandler.measurementSweepStartedSingal.connect(self.setDisplayForMeasurementStarted, Qt.QueuedConnection)
-        self.measurementHandler.measurementSweepFinishedSignal.connect(self.setDisplayForMeasurementFinished, Qt.QueuedConnection)
-        self.measurementHandler.measurementVOCStartedSignal.connect(self.setDisplayForMeasurementStarted, Qt.QueuedConnection)
-        self.measurementHandler.measurementVOCStartedSignal.connect(self.setDisplayForMeasurementFinished, Qt.QueuedConnection)
+        self.measurementHandler.measurementSweepStartedSingal.connect(self.respondMeausurementStarted, Qt.QueuedConnection)
+        self.measurementHandler.measurementSweepFinishedSignal.connect(self.respondForMeasurementFinished, Qt.QueuedConnection)
+        self.measurementHandler.measurementVOCStartedSignal.connect(self.respondMeausurementStarted, Qt.QueuedConnection)
+        self.measurementHandler.measurementVOCStartedSignal.connect(self.respondForMeasurementFinished, Qt.QueuedConnection)
 
         # Data Handler to Main GUI Thread
         self.dataHandler.updateGraphSignal.connect(self.plotData, Qt.QueuedConnection)
@@ -186,8 +203,8 @@ class MainWindow(QMainWindow):
         self.controlStartButton.clicked.connect(self.gatekeeperSweepMeasurement, Qt.QueuedConnection)
         self.controlMeasureVoc.clicked.connect(self.measurementHandler.measureVOC, Qt.QueuedConnection)
         self.inputFetchFolderPath.clicked.connect(self.folderBrowse, Qt.QueuedConnection)
-        self.inputCellArea.valueChanged.connect(self.sendAnalysisVariables, Qt.QueuedConnection)
-        self.inputPower.valueChanged.connect(self.sendAnalysisVariables, Qt.QueuedConnection)
+        self.inputCellArea.valueChanged.connect(self.gatekeeperAnalysisVariables, Qt.QueuedConnection)
+        self.inputPower.valueChanged.connect(self.gatekeeperAnalysisVariables, Qt.QueuedConnection)
 
         # Main GUI to Measurement Handler
         self.startSweepMeasurementSignal.connect(self.measurementHandler.measureSweep, Qt.QueuedConnection)
@@ -369,16 +386,52 @@ class MainWindow(QMainWindow):
         self.show()
 
     @pyqtSlot()
-    def setDisplayForMeasurementStarted(self):
+    def respondMeausurementStarted(self):
+        self.isMeasuring = True
         self.statusBar().showMessage("Measuring JV sweep...")
-        self.controlStartButton.setDisabled(True)
-        self.controlMeasureVoc.setDisabled(True)
+ 
+        # Measurement control buttons
+        self.controlStartButton.setEnabled(False)
+        self.controlMeasureVoc.setEnabled(False)
+        
+        # Analysis variables
+        self.inputCellArea.setEnabled(False)
+        self.inputCellName.setEnabled(False)
+
+        # Sweep settings
+        self.inputStartVoltage.setEnabled(False)
+        self.inputEndVoltage.setEnabled(False)
+        self.inputScanRate.setEnabled(False)
+        self.inputSweepType.setEnabled(False)
+
+        # Folder I/O setting
+        self.inputFetchFolderPath.setEnabled(False)
+        self.inputCellName.setEnabled(False)
+    
     
     @pyqtSlot()
-    def setDisplayForMeasurementFinished(self):
+    def respondForMeasurementFinished(self):
+        self.isMeasuring = False
         self.statusBar().showMessage("Measurement finished, ready to measure.")
+        
+        # Measurement control buttons
         self.controlStartButton.setEnabled(True)
         self.controlMeasureVoc.setEnabled(True)
+        
+        # Analysis variables
+        self.inputCellArea.setEnabled(True)
+        self.inputCellName.setEnabled(True)
+
+        # Sweep settings
+        self.inputStartVoltage.setEnabled(True)
+        self.inputEndVoltage.setEnabled(True)
+        self.inputScanRate.setEnabled(True)
+        self.inputSweepType.setEnabled(True)
+
+        # Folder I/O setting
+        self.inputFetchFolderPath.setEnabled(True)
+        self.inputCellName.setEnabled(True)
+    
     
     @pyqtSlot(str)
     def updateConsole(self, message):
@@ -410,7 +463,7 @@ class MainWindow(QMainWindow):
         time.sleep(0.5) # Saftey wait, paranoid step to give everything time to fully shut down.
     
     @pyqtSlot()
-    def sendAnalysisVariables(self):
+    def gatekeeperAnalysisVariables(self):
         _cellArea = self.inputCellArea.value()
         _powerIn = self.inputPower.value()
 
