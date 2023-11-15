@@ -2,6 +2,7 @@ import sys
 import random
 import time
 import os
+import json
 
 import numpy as np
 
@@ -17,19 +18,33 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 class MeasurementHandler(QObject):
     sendVocValueSignal = pyqtSignal(float)
     sendSweepPointSignal = pyqtSignal(np.ndarray)
-    measurementSweepStartedSingal = pyqtSignal()
-    measurementSweepFinishedSignal = pyqtSignal()
+    
+    sweepSetStartedSingal = pyqtSignal()     # Measurement is active.
+    finaliseSweepArraySignal = pyqtSignal()  # A sweep has finished, array can be sent for analysis.
+    sweepSetFinishedSignal = pyqtSignal()    # Measurement is no longer active.
+    abortMeasurementSignal = pyqtSignal()  # When the sweep has been aborted succesfully
+    
     measurementVOCStartedSignal = pyqtSignal()
     measurementVOCFinishedSignal = pyqtSignal()
     sendConsoleUpdateSignal = pyqtSignal(str)
+    sendStatusUpdateSignal = pyqtSignal(str)
 
     def __init__(self, mutexMeasurement):
         super().__init__()
         self.mutexMeasurement = mutexMeasurement
+        
         self.validState = True
         self.measurementValid = True
+        self.measurementConsent = False
 
         self.sendConsoleUpdateSignal.emit("Keithley 2450 Initilised")
+
+    @pyqtSlot()
+    def abortMeasurement(self):
+        self.measurementConsent = False
+
+        self.sendConsoleUpdateSignal.emit("Sweep Abort Command Registered")
+        self.sendStatusUpdateSignal.emit("Aborting Measurement...")
 
     @pyqtSlot()
     def measureVOC(self):
@@ -51,38 +66,58 @@ class MeasurementHandler(QObject):
         _sweepSettings = sweepSettings
         _startVoltage = _sweepSettings[0, 0]
         _endVoltage = _sweepSettings[0, 1]
-        _scanRate = _sweepSettings[0, 2]
+        _repeats = int(_sweepSettings[0, 2])
+        _scanRate = _sweepSettings[0, 3]
         
-        _n = 1.5 # ideality factor
+        _n = 1.5
         _k = 1.38e-23
         _T = 300
         _I0 = 1e-12
         _q = 1.6e-19
 
         if self.measurementValid:
-            self.sendConsoleUpdateSignal.emit("Sweep Measurement Started")
-            self.measurementSweepStartedSingal.emit()
-
-            _sweepPoint = np.empty((1, 2))
+            self.measurementConsent = True
+            self.sweepSetStartedSingal.emit()
             
-            _yAxisShift = np.round(0.05+((0.25-0.05)*np.random.rand()), 3)
-            _measurementPoints = np.linspace(_startVoltage, _endVoltage, num=250)
-            for _voltagePoint in _measurementPoints:
-
-                _sleepTime = 0.045+(0.055-0.045)*np.random.rand()
-                time.sleep(_sleepTime)
-
-                _current = _I0*(np.exp((_q * _voltagePoint)/(_n*_k*_T)) - 1)
-
-                _currentError = -0.005+(0.015+0.005)*np.random.rand()
-
-                _sweepPoint[0, 0] = _voltagePoint
-                _sweepPoint[0, 1] = _current - _yAxisShift + _currentError
+            for _sweepNumber in range(1, _repeats+1):
                 
-                self.sendSweepPointSignal.emit(_sweepPoint.copy()) # .copy() otherwise the for loop "catches up" with the emit signal, and you end up writing over the data being emitted.    
-            self.sendConsoleUpdateSignal.emit("Sweep Measurement Finished")
-            self.measurementSweepFinishedSignal.emit()
+                # Only send messages if measurement has consent
+                if self.measurementConsent:
+                    _consoleMessage = f"Measuring Sweep ({_sweepNumber} of {_repeats})"
+                    self.sendConsoleUpdateSignal.emit(_consoleMessage)
+                    self.sendStatusUpdateSignal.emit(_consoleMessage)
+                
+                _sweepPoint = np.empty((1, 2))
+                
+                _yAxisShift = np.round(0.05+((0.25-0.05)*np.random.rand()), 3)
+                _measurementPoints = np.linspace(_startVoltage, _endVoltage, num=250)
 
+                for _voltagePoint in _measurementPoints:
+                    
+                    if self.measurementConsent:
+
+                        _sleepTime = 0.045+(0.055-0.045)*np.random.rand()
+                        time.sleep(_sleepTime)
+
+                        _current = _I0*(np.exp((_q * _voltagePoint)/(_n*_k*_T)) - 1)
+
+                        _currentError = -0.005+(0.015+0.005)*np.random.rand()
+
+                        _sweepPoint[0, 0] = _voltagePoint
+                        _sweepPoint[0, 1] = _current - _yAxisShift + _currentError
+                        
+                        self.sendSweepPointSignal.emit(_sweepPoint.copy()) # .copy() otherwise the for loop "catches up" with the emit signal, and you end up writing over the data being emitted.    
+                                
+                # Only send finaliseSweepArraySignal IF the program finished the loop with measurement consent
+                if self.measurementConsent: 
+                    self.sendConsoleUpdateSignal.emit(f"Sweep Finished ({_sweepNumber} of {_repeats})")
+                    self.finaliseSweepArraySignal.emit()
+            
+            # Only send measurement finished if there is measurement consent
+            if self.measurementConsent:
+                self.sweepSetFinishedSignal.emit()
+            else:
+                self.abortMeasurementSignal.emit()
         
         else:
             pass
@@ -94,6 +129,7 @@ class MeasurementHandler(QObject):
 class DataHandler(QObject):
     updateGraphSignal = pyqtSignal(np.ndarray)
     sendConsoleUpdateSignal = pyqtSignal(str)
+    sendStatusUpdateSignal = pyqtSignal(str)
 
     def __init__(self):
         super().__init__()
@@ -121,6 +157,14 @@ class DataHandler(QObject):
         self.sendConsoleUpdateSignal.emit("Sweep Data Finalised")
     
     @pyqtSlot()
+    def abortMeasurement(self):
+        self.workingArray = []
+
+        # The console and status are updated from "aborting" to "aborted" ONLY once the measurement thread has cleared the working array, which only happens if the main sweep loop in the meausrement thread is exited.
+        self.sendConsoleUpdateSignal.emit("Measurement Aborted Successfully")
+        self.sendStatusUpdateSignal.emit("Measurement Aborted. Ready to measure.")
+
+    @pyqtSlot()
     def sendUpdateGraphSignal(self):
         # It is possible for sendUpdateGraphSignal() to be queued by the self.timer.timeout event AS finaliseArray() is running, resulting the working array being cleared before sendUpdateGraphSignal() runs.
         # We can never be sure there isn't a signal emission already in the event queue waiting to be processed which will call a method to access self.workingArray AFTER it has been cleared by finaliseArray().
@@ -145,6 +189,7 @@ class analysisHandler(QObject):
 
 class MainWindow(QMainWindow):
     startSweepMeasurementSignal = pyqtSignal(np.ndarray)
+    abortMeasurementSignal = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -187,12 +232,14 @@ class MainWindow(QMainWindow):
 
         # Measurement Handler to Data Handler:
         self.measurementHandler.sendSweepPointSignal.connect(self.dataHandler.buildArrayFromSweepPoints, Qt.QueuedConnection)
-        self.measurementHandler.measurementSweepFinishedSignal.connect(self.dataHandler.finaliseArray, Qt.QueuedConnection)
+        self.measurementHandler.finaliseSweepArraySignal.connect(self.dataHandler.finaliseArray, Qt.QueuedConnection)
+        self.measurementHandler.abortMeasurementSignal.connect(self.dataHandler.abortMeasurement)
 
         # Measurement Handler to Main GUI Thread
+        self.measurementHandler.sweepSetStartedSingal.connect(self.respondMeausurementStarted, Qt.QueuedConnection)
+        self.measurementHandler.sweepSetFinishedSignal.connect(self.respondForMeasurementFinished, Qt.QueuedConnection)
+        self.measurementHandler.abortMeasurementSignal.connect(self.respondForMeasurementFinished, Qt.QueuedConnection)
         self.measurementHandler.sendVocValueSignal.connect(self.updateVocValue, Qt.QueuedConnection)
-        self.measurementHandler.measurementSweepStartedSingal.connect(self.respondMeausurementStarted, Qt.QueuedConnection)
-        self.measurementHandler.measurementSweepFinishedSignal.connect(self.respondForMeasurementFinished, Qt.QueuedConnection)
         self.measurementHandler.measurementVOCStartedSignal.connect(self.respondMeausurementStarted, Qt.QueuedConnection)
         self.measurementHandler.measurementVOCStartedSignal.connect(self.respondForMeasurementFinished, Qt.QueuedConnection)
 
@@ -201,17 +248,23 @@ class MainWindow(QMainWindow):
 
         # Main GUI Self Connections
         self.controlStartButton.clicked.connect(self.gatekeeperSweepMeasurement, Qt.QueuedConnection)
-        self.controlMeasureVoc.clicked.connect(self.measurementHandler.measureVOC, Qt.QueuedConnection)
         self.inputFetchFolderPath.clicked.connect(self.folderBrowse, Qt.QueuedConnection)
         self.inputCellArea.valueChanged.connect(self.gatekeeperAnalysisVariables, Qt.QueuedConnection)
         self.inputPower.valueChanged.connect(self.gatekeeperAnalysisVariables, Qt.QueuedConnection)
 
         # Main GUI to Measurement Handler
+        self.controlMeasureVoc.clicked.connect(self.measurementHandler.measureVOC, Qt.QueuedConnection)
         self.startSweepMeasurementSignal.connect(self.measurementHandler.measureSweep, Qt.QueuedConnection)
+        self.controlsStopButton.clicked.connect(self.measurementHandler.abortMeasurement, Qt.DirectConnection) # Direct to interrupt any current processes and set measurement consent to false
+        self.abortMeasurementSignal.connect(self.measurementHandler.abortMeasurement, Qt.DirectConnection)
 
-        # Console Connections
+        # Console and Status Connections
         self.measurementHandler.sendConsoleUpdateSignal.connect(self.updateConsole, Qt.QueuedConnection)
+        self.measurementHandler.sendStatusUpdateSignal.connect(self.updateStatus, Qt.QueuedConnection)
         self.dataHandler.sendConsoleUpdateSignal.connect(self.updateConsole, Qt.QueuedConnection)
+        self.dataHandler.sendStatusUpdateSignal.connect(self.updateStatus, Qt.QueuedConnection)
+
+        self.loadProgramSettings()
 
     def createInstrumentSettings(self):
 
@@ -219,44 +272,47 @@ class MainWindow(QMainWindow):
         self.layoutInstrumentSettings = QGridLayout(self.InstrumentSettings)
 
         self.labelFourOrTwoWire = QLabel("Terminal Settings", self.InstrumentSettings)
-        self.inputFourOrTwoWire = QComboBox(self.InstrumentSettings)
-        self.inputFourOrTwoWire.addItem("Four Wire")
-        self.inputFourOrTwoWire.addItem("Two Wire")
+        self.inputTerminalSettings = QComboBox(self.InstrumentSettings)
+        self.inputTerminalSettings.addItem("Four Wire")
+        self.inputTerminalSettings.addItem("Two Wire")
 
         self.labelFrontOrRearPanel = QLabel("Panel Settings", self.InstrumentSettings)
-        self.inputFrontOrRearPanel = QComboBox(self.InstrumentSettings)
-        self.inputFrontOrRearPanel.addItem("Front Banana Connection")
-        self.inputFrontOrRearPanel.addItem("Rear Triaxial Connection")
+        self.inputPanelSetting = QComboBox(self.InstrumentSettings)
+        self.inputPanelSetting.addItem("Front Banana Connection")
+        self.inputPanelSetting.addItem("Rear Triaxial Connection")
 
         self.layoutInstrumentSettings.addWidget(self.labelFourOrTwoWire, 0, 0)
-        self.layoutInstrumentSettings.addWidget(self.inputFourOrTwoWire, 1, 0)
+        self.layoutInstrumentSettings.addWidget(self.inputTerminalSettings, 1, 0)
         self.layoutInstrumentSettings.addWidget(self.labelFrontOrRearPanel, 0, 1)
-        self.layoutInstrumentSettings.addWidget(self.inputFrontOrRearPanel, 1, 1)
+        self.layoutInstrumentSettings.addWidget(self.inputPanelSetting, 1, 1)
 
     def createSweepSettings(self):
 
         self.SweepSettings = QGroupBox("Sweep Settings")
         self.SweepSettings.setMaximumWidth(200)
-        self.SweepSettings.setMaximumHeight(207) # Minimum height of QGroupBox, considering the space needed for it's child widgets
+        self.SweepSettings.setMaximumHeight(250) # Minimum height of QGroupBox, considering the space needed for it's child widgets
         self.layoutSweepSettings = QVBoxLayout(self.SweepSettings)
 
         self.labelStartVoltage = QLabel("Start Voltage (V)", self.SweepSettings)
         self.inputStartVoltage = QDoubleSpinBox(self.SweepSettings)
         self.inputStartVoltage.setSingleStep(0.01)
         self.inputStartVoltage.setRange(-10, 10)
-        self.inputStartVoltage.setValue(1.05)
 
         self.labelEndVoltage = QLabel("End Voltage (V)", self.SweepSettings)
         self.inputEndVoltage = QDoubleSpinBox(self.SweepSettings)
         self.inputEndVoltage.setSingleStep(0.01)
         self.inputEndVoltage.setRange(-10, 10)
-        self.inputEndVoltage.setValue(-0.05)
 
         self.labelScanRate = QLabel("Scan Rate (mV/s)", self.SweepSettings)
         self.inputScanRate = QDoubleSpinBox(self.SweepSettings)
         self.inputScanRate.setSingleStep(0.01)
         self.inputScanRate.setMinimum(0)
-        self.inputScanRate.setValue(2000)
+        self.inputScanRate.setMaximum(2000)
+
+        self.labelRepeats = QLabel("# of Repeats", self.SweepSettings)
+        self.inputRepeats = QSpinBox(self.SweepSettings)
+        self.inputRepeats.setMinimum(1)
+        self.inputRepeats.setMaximum(10000) # why not
 
         self.labelSweepType = QLabel("Sweep Type", self.SweepSettings)
         self.inputSweepType = QComboBox(self.SweepSettings)
@@ -269,6 +325,8 @@ class MainWindow(QMainWindow):
         self.layoutSweepSettings.addWidget(self.inputEndVoltage)
         self.layoutSweepSettings.addWidget(self.labelScanRate)
         self.layoutSweepSettings.addWidget(self.inputScanRate)
+        self.layoutSweepSettings.addWidget(self.labelRepeats)
+        self.layoutSweepSettings.addWidget(self.inputRepeats)
         self.layoutSweepSettings.addWidget(self.labelSweepType)
         self.layoutSweepSettings.addWidget(self.inputSweepType)
         
@@ -342,6 +400,8 @@ class MainWindow(QMainWindow):
         self.controlMeasureVoc = QPushButton("Measure Voc", self.MeasurementControls)
         self.labelVocValue = QLabel("Voc: NaN", self.MeasurementControls)
 
+        self.controlsStopButton.setEnabled(False)
+
         self.layoutMeasurementControls.addWidget(self.controlStartButton)
         self.layoutMeasurementControls.addWidget(self.controlsStopButton)
         self.layoutMeasurementControls.addWidget(self.controlMeasureVoc)
@@ -385,6 +445,87 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.mainWidget)
         self.show()
 
+    def saveProgramSettings(self):
+
+        # Instrument Settings
+        _terminalSetting = self.inputTerminalSettings.currentText()
+        _panelSetting = self.inputPanelSetting.currentText()
+
+        # Sweep setting
+        _startVoltage = self.inputStartVoltage.value()
+        _endVoltage = self.inputEndVoltage.value()
+        _scanRate = self.inputScanRate.value()
+        _repeats = self.inputRepeats.value()
+        _sweepType = self.inputSweepType.currentText()
+
+        # Analysis settings
+        _cellArea = self.inputCellArea.value()
+        _power = self.inputPower.value()
+
+        # File I/O settings
+        _cellName = self.inputCellName.text()
+        _workingFolderPath = self.workingFolderPath
+
+        _settings = {
+            "Instrument Settings": {
+                "Terminal Setting": _terminalSetting,
+                "Panel Setting": _panelSetting
+            },
+            "Sweep Settings": {
+                "Start Voltage": _startVoltage,
+                "End Voltage": _endVoltage,
+                "Scan Rate": _scanRate,
+                "Repeats": _repeats,
+                "Sweep Type": _sweepType
+            },
+            "Analysis Settings": {
+                "Cell Area": _cellArea,
+                "Power": _power
+            },
+            "File I/O Settings": {
+                "Cell Name": _cellName, 
+                "Working Folder Path": _workingFolderPath
+            }
+        }
+
+        with open("programSettings.json", "w") as file:
+            json.dump(_settings, file, indent=4)
+
+    def loadProgramSettings(self):
+        try:
+            with open("programSettings.json", "r") as file:
+                _settings = json.load(file)
+
+            # Instrument Settings
+            self.inputTerminalSettings.setCurrentText(_settings["Instrument Settings"]["Terminal Setting"])
+            self.inputPanelSetting.setCurrentText(_settings["Instrument Settings"]["Panel Setting"])
+
+            # Sweep settings
+            self.inputStartVoltage.setValue(_settings["Sweep Settings"]["Start Voltage"])
+            self.inputEndVoltage.setValue(_settings["Sweep Settings"]["End Voltage"])
+            self.inputScanRate.setValue(_settings["Sweep Settings"]["Scan Rate"])
+            self.inputRepeats.setValue(_settings["Sweep Settings"]["Repeats"])
+            self.inputSweepType.setCurrentText(_settings["Sweep Settings"]["Sweep Type"])
+
+            # Analysis settings
+            self.inputCellArea.setValue(_settings["Analysis Settings"]["Cell Area"])
+            self.inputPower.setValue(_settings["Analysis Settings"]["Power"])
+
+            # File I/O settings
+            self.inputCellName.setText(_settings["File I/O Settings"]["Cell Name"])
+            self.workingFolderPath = _settings["File I/O Settings"]["Working Folder Path"]
+            self.displayWorkingFolderPath.setPlainText(self.workingFolderPath)
+
+        except (IOError, json.JSONDecodeError) as error:
+            self.updateConsole("WARNING: Error reading programSettings.json, the file likely does not exist, setting default values")
+
+            # Defaults
+            self.inputStartVoltage.setValue(1.05)
+            self.inputEndVoltage.setValue(-0.05)
+            self.inputScanRate.setValue(10)
+            self.inputRepeats.setValue(1)
+
+
     @pyqtSlot()
     def respondMeausurementStarted(self):
         self.isMeasuring = True
@@ -392,6 +533,7 @@ class MainWindow(QMainWindow):
  
         # Measurement control buttons
         self.controlStartButton.setEnabled(False)
+        self.controlsStopButton.setEnabled(True)
         self.controlMeasureVoc.setEnabled(False)
         
         # Analysis variables
@@ -402,6 +544,7 @@ class MainWindow(QMainWindow):
         self.inputStartVoltage.setEnabled(False)
         self.inputEndVoltage.setEnabled(False)
         self.inputScanRate.setEnabled(False)
+        self.inputRepeats.setEnabled(False)
         self.inputSweepType.setEnabled(False)
 
         # Folder I/O setting
@@ -409,9 +552,8 @@ class MainWindow(QMainWindow):
         self.inputCellName.setEnabled(False)
 
         # Insturment settings
-        self.inputFrontOrRearPanel.setEnabled(False)
-        self.inputFourOrTwoWire.setEnabled(False)
-    
+        self.inputPanelSetting.setEnabled(False)
+        self.inputTerminalSettings.setEnabled(False)
     
     @pyqtSlot()
     def respondForMeasurementFinished(self):
@@ -420,6 +562,7 @@ class MainWindow(QMainWindow):
         
         # Measurement control buttons
         self.controlStartButton.setEnabled(True)
+        self.controlsStopButton.setEnabled(False)
         self.controlMeasureVoc.setEnabled(True)
         
         # Analysis variables
@@ -430,6 +573,7 @@ class MainWindow(QMainWindow):
         self.inputStartVoltage.setEnabled(True)
         self.inputEndVoltage.setEnabled(True)
         self.inputScanRate.setEnabled(True)
+        self.inputRepeats.setEnabled(True)
         self.inputSweepType.setEnabled(True)
 
         # Folder I/O setting
@@ -437,15 +581,18 @@ class MainWindow(QMainWindow):
         self.inputCellName.setEnabled(True)
 
         # Insturment settings
-        self.inputFrontOrRearPanel.setEnabled(True)
-        self.inputFourOrTwoWire.setEnabled(True)
-    
+        self.inputPanelSetting.setEnabled(True)
+        self.inputTerminalSettings.setEnabled(True)
     
     @pyqtSlot(str)
     def updateConsole(self, message):
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         formatted_message = f"[{timestamp}]:\n{message}\n"
         self.console.appendPlainText(formatted_message)
+
+    @pyqtSlot(str)
+    def updateStatus(self, message):
+        self.statusBar().showMessage(message)
 
     @pyqtSlot(float)
     def updateVocValue(self, value):
@@ -466,12 +613,17 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot()    
     def shutdown(self):
+
+        self.saveProgramSettings()
+        self.abortMeasurementSignal.emit()
+        time.sleep(1) # Saftey wait, paranoid step to give threads time to recieve signals
+
         self.THREAD_Measurement.quit()
         self.THREAD_Measurement.wait()
         self.THREAD_Data.quit()
         self.THREAD_Data.wait()
         time.sleep(0.5) # Saftey wait, paranoid step to give everything time to fully shut down.
-    
+
     @pyqtSlot()
     def gatekeeperAnalysisVariables(self):
         _cellArea = self.inputCellArea.value()
@@ -489,9 +641,10 @@ class MainWindow(QMainWindow):
         if self.workingFolderPath:
             _startVoltage = self.inputStartVoltage.value() 
             _endVoltage =  self.inputEndVoltage.value()
+            _repeats = self.inputRepeats.value()
             _scanRate = self.inputScanRate.value()
-            _sweepProperties = np.empty([1, 3])
-            _sweepProperties[0, :] = [_startVoltage, _endVoltage, _scanRate]
+            _sweepProperties = np.empty([1, 4])
+            _sweepProperties[0, :] = [_startVoltage, _endVoltage, _repeats, _scanRate]
 
             self.startSweepMeasurementSignal.emit(_sweepProperties)
         else:
