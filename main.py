@@ -130,6 +130,7 @@ class DataHandler(QObject):
     updateGraphSignal = pyqtSignal(np.ndarray)
     sendConsoleUpdateSignal = pyqtSignal(str)
     sendStatusUpdateSignal = pyqtSignal(str)
+    sendDataArrayForSavingSingal = pyqtSignal(np.ndarray)
 
     def __init__(self):
         super().__init__()
@@ -151,7 +152,9 @@ class DataHandler(QObject):
         self.timer.stop()
 
         _measurementArray = np.vstack(self.workingArray)
+        
         self.updateGraphSignal.emit(_measurementArray)
+        self.sendDataArrayForSavingSingal.emit(_measurementArray)
 
         self.workingArray = []
         self.sendConsoleUpdateSignal.emit("Sweep Data Finalised")
@@ -186,6 +189,35 @@ class analysisHandler(QObject):
         pass
 
 
+
+class DataSaver(QRunnable):
+    def __init__(self, dataArray, sweepSettings, analysisSettings, cellName, dataSavePath):
+        super().__init__()
+        self.dataArray = dataArray
+        self.sweepSettings = sweepSettings
+        self.analysisSettings = analysisSettings
+        self.cellName = cellName
+        self.dataSavePath = dataSavePath
+
+        if not self.cellName:
+            self.cellName = "DEFAULT"
+
+
+    def run(self):
+
+        _startVoltage = self.sweepSettings[0, 0]
+        _endVoltage = self.sweepSettings[0, 1]
+        _scanRate = self.sweepSettings[0, 2]
+
+        _cellArea = self.analysisSettings[0, 0]
+        _power = self.analysisSettings[0, 1]
+
+        _header = f"Sweep Settings:\nStart Voltage (V): {_startVoltage}\nEnd Voltage (V): {_endVoltage}\nScan Rate (mV/s): {_scanRate}\n\nAnalysis Variables:\nCell Area(cm2): {_cellArea}\nPower (mWcm-2): {_power}\n\nVoltage(V)   Current (A)"
+        _path = self.dataSavePath+f"\\{self.cellName}.csv"
+        print(_path)
+        np.savetxt(_path, self.dataArray, delimiter='   ', header=_header, comments='', fmt='%.5e')
+
+        # To do: save J not I. In gate keeper, validate file path is valid for system.
 
 class MainWindow(QMainWindow):
     startSweepMeasurementSignal = pyqtSignal(np.ndarray)
@@ -230,6 +262,9 @@ class MainWindow(QMainWindow):
         self.dataHandler.moveToThread(self.THREAD_Data)
         self.THREAD_Data.start()
 
+        # Threadpool
+        self.threadpool = QThreadPool()
+
         # Measurement Handler to Data Handler:
         self.measurementHandler.sendSweepPointSignal.connect(self.dataHandler.buildArrayFromSweepPoints, Qt.QueuedConnection)
         self.measurementHandler.finaliseSweepArraySignal.connect(self.dataHandler.finaliseArray, Qt.QueuedConnection)
@@ -245,6 +280,7 @@ class MainWindow(QMainWindow):
 
         # Data Handler to Main GUI Thread
         self.dataHandler.updateGraphSignal.connect(self.plotData, Qt.QueuedConnection)
+        self.dataHandler.sendDataArrayForSavingSingal.connect(self.startSaveDataThread, Qt.QueuedConnection)
 
         # Main GUI Self Connections
         self.controlStartButton.clicked.connect(self.gatekeeperSweepMeasurement, Qt.QueuedConnection)
@@ -516,8 +552,8 @@ class MainWindow(QMainWindow):
             self.workingFolderPath = _settings["File I/O Settings"]["Working Folder Path"]
             self.displayWorkingFolderPath.setPlainText(self.workingFolderPath)
 
-        except (IOError, json.JSONDecodeError) as error:
-            self.updateConsole("WARNING: Error reading programSettings.json, the file likely does not exist, setting default values")
+        except:
+            self.updateConsole("WARNING: Error reading programSettings.json, the file likely does not exist or has invalid values, setting default values.")
 
             # Defaults
             self.inputStartVoltage.setValue(1.05)
@@ -525,9 +561,26 @@ class MainWindow(QMainWindow):
             self.inputScanRate.setValue(10)
             self.inputRepeats.setValue(1)
 
+    @pyqtSlot(np.ndarray)
+    def startSaveDataThread(self, dataArray):
+        """
+        CALLED FROM: DataHandler
+        CALL PATH: MainWindow (gatekeeperStartMeasurement) -> MeasurementHandler (measureSweep) -> DataHandler (finaliseArray) -> Here
+        """
+
+        _analysisSettings = np.empty([1, 2])
+        _analysisSettings[0, 0] = self.inputCellArea.value()
+        _analysisSettings[0, 1] = self.inputPower.value()
+
+        saveDataTask = DataSaver(dataArray, self.sweepProperties, _analysisSettings, self.inputCellName.text(), self.workingFolderPath)
+        self.threadpool.start(saveDataTask)
+        self.threadpool.waitForDone()
 
     @pyqtSlot()
     def respondMeausurementStarted(self):
+        """
+        SLOT CALLED FROM: MeasurementHandler
+        """
         self.isMeasuring = True
         self.statusBar().showMessage("Measuring JV sweep...")
  
@@ -643,10 +696,10 @@ class MainWindow(QMainWindow):
             _endVoltage =  self.inputEndVoltage.value()
             _repeats = self.inputRepeats.value()
             _scanRate = self.inputScanRate.value()
-            _sweepProperties = np.empty([1, 4])
-            _sweepProperties[0, :] = [_startVoltage, _endVoltage, _repeats, _scanRate]
+            self.sweepProperties = np.empty([1, 4])
+            self.sweepProperties[0, :] = [_startVoltage, _endVoltage, _repeats, _scanRate]
 
-            self.startSweepMeasurementSignal.emit(_sweepProperties)
+            self.startSweepMeasurementSignal.emit(self.sweepProperties)
         else:
             self.AlertBox = QMessageBox()
             self.AlertBox.setWindowTitle("Warning!")

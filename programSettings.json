@@ -6,8 +6,8 @@
     "Sweep Settings": {
         "Start Voltage": 1.05,
         "End Voltage": -0.05,
-        "Scan Rate": 9.95,
-        "Repeats": 10000,
+        "Scan Rate": 10.0,
+        "Repeats": 1,
         "Sweep Type": "Standard"
     },
     "Analysis Settings": {
@@ -15,7 +15,7 @@
         "Power": 0.0
     },
     "File I/O Settings": {
-        "Cell Name": "TestCell1",
-        "Working Folder Path": "C:/Users/B6032215/OneDrive - Newcastle University/Postgraduate Files/Data and Analysis/Data/Cells/20201216 - 2nd Batch"
+        "Cell Name": "Test",
+        "Working Folder Path": "E:/Libaries/Downloads"
     }
 }
