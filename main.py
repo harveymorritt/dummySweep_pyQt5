@@ -1,7 +1,7 @@
 import sys
-import random
 import time
 import os
+import re
 import json
 
 import numpy as np
@@ -22,7 +22,7 @@ class MeasurementHandler(QObject):
     sweepSetStartedSingal = pyqtSignal()     # Measurement is active.
     finaliseSweepArraySignal = pyqtSignal()  # A sweep has finished, array can be sent for analysis.
     sweepSetFinishedSignal = pyqtSignal()    # Measurement is no longer active.
-    abortMeasurementSignal = pyqtSignal()  # When the sweep has been aborted succesfully
+    abortMeasurementSignal = pyqtSignal()    # When the sweep has been aborted succesfully
     
     measurementVOCStartedSignal = pyqtSignal()
     measurementVOCFinishedSignal = pyqtSignal()
@@ -199,25 +199,49 @@ class DataSaver(QRunnable):
         self.cellName = cellName
         self.dataSavePath = dataSavePath
 
+        self.startVoltage = self.sweepSettings[0, 0]
+        self.endVoltage = self.sweepSettings[0, 1]
+        self.scanRate = self.sweepSettings[0, 2]
+
+        self.cellArea = self.analysisSettings[0, 0]
+        self.power = self.analysisSettings[0, 1]
+
         if not self.cellName:
             self.cellName = "DEFAULT"
 
-
     def run(self):
 
-        _startVoltage = self.sweepSettings[0, 0]
-        _endVoltage = self.sweepSettings[0, 1]
-        _scanRate = self.sweepSettings[0, 2]
+        _header = f"Sweep Settings:\nStart Voltage (V): {self.startVoltage}\nEnd Voltage (V): {self.endVoltage}\nScan Rate (mV/s): {self.scanRate}\n\nAnalysis Variables:\nCell Area(cm2): {self.cellArea}\nPower (mWcm-2): {self.power}\n\nVoltage(V)   Current (A)"
+        _cellName = self.cellName
 
-        _cellArea = self.analysisSettings[0, 0]
-        _power = self.analysisSettings[0, 1]
+        _pattern = re.compile(rf"{re.escape(_cellName)}(?:_(\d+))?.*$")
+        _workingFolderPath = self.dataSavePath
 
-        _header = f"Sweep Settings:\nStart Voltage (V): {_startVoltage}\nEnd Voltage (V): {_endVoltage}\nScan Rate (mV/s): {_scanRate}\n\nAnalysis Variables:\nCell Area(cm2): {_cellArea}\nPower (mWcm-2): {_power}\n\nVoltage(V)   Current (A)"
-        _path = self.dataSavePath+f"\\{self.cellName}.csv"
-        print(_path)
+        # Check if files saved with same name
+        _highestNumFound = 0
+        for _fileName in os.listdir(_workingFolderPath):
+            _match = _pattern.match(_fileName)
+
+            # If files with same name, check for number
+            if _match:
+                _matchedNumber = _match.group(1)
+
+                # If it has a number, keep track of the highest number found
+                if _matchedNumber:
+                    _num = int(_matchedNumber)
+                    _highestNumFound = max(_highestNumFound, _num)
+        
+        # If no number found, save file as "file number 1", otherwise increment
+        if _highestNumFound == 0:
+            _cellName = _cellName + "_1"
+        else:
+            _nextNum = _highestNumFound + 1
+            _cellName = _cellName + "_" + str(_nextNum)
+
+        _path = self.dataSavePath+f"\\{_cellName}.csv"
         np.savetxt(_path, self.dataArray, delimiter='   ', header=_header, comments='', fmt='%.5e')
 
-        # To do: save J not I. In gate keeper, validate file path is valid for system.
+
 
 class MainWindow(QMainWindow):
     startSweepMeasurementSignal = pyqtSignal(np.ndarray)
@@ -447,10 +471,18 @@ class MainWindow(QMainWindow):
  
         # Graph Tab Layout
         self.graphTab = QWidget()
-        layoutGraphTab = QVBoxLayout(self.graphTab)
+        self.layoutGraphTab = QVBoxLayout(self.graphTab)
         self.figure = Figure()
-        self.canvas = FigureCanvas(self.figure)
-        layoutGraphTab.addWidget(self.canvas)
+        self.canvasWidget = FigureCanvas(self.figure)
+        self.layoutGraphTab.addWidget(self.canvasWidget)
+
+        # Table Tab Layout
+        self.tableTab = QWidget()
+        self.layoutTableTab = QVBoxLayout(self.tableTab)
+        self.tableWidget = QTableWidget(self.tableTab)
+        self.tableWidget.setColumnCount(5)
+        self.tableWidget.setHorizontalHeaderLabels(["Cell Name", "Voc", "Jsc", "FF", "Efficiency"])
+        self.layoutTableTab.addWidget(self.tableWidget)
 
         # Console Tab Layout
         self.consoleTab = QWidget()
@@ -462,6 +494,7 @@ class MainWindow(QMainWindow):
         # Tab layout (with graph and console)
         self.tabControl = QTabWidget()
         self.tabControl.addTab(self.graphTab, "Graph")
+        self.tabControl.addTab(self.tableTab, "Table")
         self.tabControl.addTab(self.consoleTab, "Console")
 
     def buildMainUI(self):
@@ -649,7 +682,6 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot(float)
     def updateVocValue(self, value):
-        print(self.displayWorkingFolderPath.height())
         self.valueVoc = value * 1000
         self.labelVocValue.setText(f"Voc: {self.valueVoc:.0f} mV")
 
@@ -662,7 +694,7 @@ class MainWindow(QMainWindow):
         ax.grid()
         ax.set_xlabel("Voltage (V)")
         ax.set_ylabel("Current (A)")
-        self.canvas.draw()
+        self.canvasWidget.draw()
 
     @pyqtSlot()    
     def shutdown(self):
@@ -691,21 +723,31 @@ class MainWindow(QMainWindow):
     def gatekeeperSweepMeasurement(self):
         """Checks if there is a valid path to save data to. Packs the current sweep settings into an array and sends it to the measurement thread."""
 
+        # Check if a folder path has been selected.
         if self.workingFolderPath:
-            _startVoltage = self.inputStartVoltage.value() 
-            _endVoltage =  self.inputEndVoltage.value()
-            _repeats = self.inputRepeats.value()
-            _scanRate = self.inputScanRate.value()
-            self.sweepProperties = np.empty([1, 4])
-            self.sweepProperties[0, :] = [_startVoltage, _endVoltage, _repeats, _scanRate]
 
-            self.startSweepMeasurementSignal.emit(self.sweepProperties)
+            # Check if folder path exists.
+            if os.path.isdir(self.workingFolderPath):
+                _startVoltage = self.inputStartVoltage.value() 
+                _endVoltage =  self.inputEndVoltage.value()
+                _repeats = self.inputRepeats.value()
+                _scanRate = self.inputScanRate.value()
+                self.sweepProperties = np.empty([1, 4])
+                self.sweepProperties[0, :] = [_startVoltage, _endVoltage, _repeats, _scanRate]
+
+                self.startSweepMeasurementSignal.emit(self.sweepProperties)
+            else:
+                self.displayAlertBox("A folder path is selected but it is not valid for this computer.\nDid you load the configuration file from another machine?")
         else:
-            self.AlertBox = QMessageBox()
-            self.AlertBox.setWindowTitle("Warning!")
-            self.AlertBox.setText("The working folder path not selected! A working folder path must be set before starting a measurement!")
-            self.AlertBox.exec_()
-            
+            self.displayAlertBox("The working folder path not selected! A working folder path must be set before starting a measurement!")
+
+    def displayAlertBox(text):
+        """Display a pop-up warning box"""
+        self.AlertBox = QMessageBox()
+        self.AlertBox.setWindowTitle("Warning!")
+        self.AlertBox.setText(text)
+        self.AlertBox.exec_()
+
     @pyqtSlot()
     def folderBrowse(self):
         self.workingFolderPath = QFileDialog.getExistingDirectory(self, "Select Folder")

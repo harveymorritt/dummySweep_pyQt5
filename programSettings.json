@@ -7,7 +7,7 @@
         "Start Voltage": 1.05,
         "End Voltage": -0.05,
         "Scan Rate": 10.0,
-        "Repeats": 1,
+        "Repeats": 5,
         "Sweep Type": "Standard"
     },
     "Analysis Settings": {
@@ -15,7 +15,7 @@
         "Power": 0.0
     },
     "File I/O Settings": {
-        "Cell Name": "Test",
-        "Working Folder Path": "E:/Libaries/Downloads"
+        "Cell Name": "TestFile_REMOVE_ME",
+        "Working Folder Path": "C:/Users/B6032215/OneDrive - Newcastle University/Postgraduate Files/Python"
     }
 }
