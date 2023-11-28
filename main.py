@@ -46,6 +46,7 @@ class MainWindow(QMainWindow):
 
         # Mutex objects
         self.mutexMeasurement = QMutex()
+        self.mutexFileSaving = QMutex()
 
         # Measurement Thread
         self.THREAD_Measurement = QThread()
@@ -379,7 +380,7 @@ class MainWindow(QMainWindow):
         _analysisSettings[0, 0] = self.inputCellArea.value()
         _analysisSettings[0, 1] = self.inputPower.value()
 
-        saveDataTask = DataSaver(dataArray, self.sweepProperties, _analysisSettings, self.inputCellName.text(), self.workingFolderPath)
+        saveDataTask = DataSaver(self.mutexFileSaving, dataArray, self.sweepProperties, _analysisSettings, self.inputCellName.text(), self.workingFolderPath)
         self.threadpool.start(saveDataTask)
         self.threadpool.waitForDone()
 
@@ -475,7 +476,7 @@ class MainWindow(QMainWindow):
 
         self.saveProgramSettings()
         self.abortMeasurementSignal.emit()
-        time.sleep(1) # Saftey wait, paranoid step to give threads time to recieve signals
+        time.sleep(1) # Saftey wait, paranoid step to give threads time to recieve signals to quit
 
         self.THREAD_Measurement.quit()
         self.THREAD_Measurement.wait()

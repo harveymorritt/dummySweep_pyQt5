@@ -7,12 +7,12 @@
         "Start Voltage": 1.05,
         "End Voltage": -0.05,
         "Scan Rate": 10.0,
-        "Repeats": 4,
+        "Repeats": 1,
         "Sweep Type": "Standard"
     },
     "Analysis Settings": {
-        "Cell Area": 0.0,
-        "Power": 0.0
+        "Cell Area": 0.05,
+        "Power": 0.05
     },
     "File I/O Settings": {
         "Cell Name": "TestFile_REMOVE_ME",

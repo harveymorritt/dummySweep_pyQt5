@@ -4,8 +4,10 @@ import numpy as np
 from PyQt5.QtCore import *
 
 class DataSaver(QRunnable):
-    def __init__(self, dataArray, sweepSettings, analysisSettings, cellName, dataSavePath):
+    def __init__(self, mutex, dataArray, sweepSettings, analysisSettings, cellName, dataSavePath):
         super().__init__()
+        self.mutexFileSaving = mutex
+
         self.dataArray = dataArray
         self.sweepSettings = sweepSettings
         self.analysisSettings = analysisSettings
@@ -23,6 +25,8 @@ class DataSaver(QRunnable):
             self.cellName = "DEFAULT"
 
     def run(self):
+
+        self.mutexFileSaving.lock() # Theoretically possible for multiple DataSaver QRunnables to operate at once, to prevent duplicate increments and therefore file overwrites, use a mutex
 
         _header = f"Sweep Settings:\nStart Voltage (V): {self.startVoltage}\nEnd Voltage (V): {self.endVoltage}\nScan Rate (mV/s): {self.scanRate}\n\nAnalysis Variables:\nCell Area(cm2): {self.cellArea}\nPower (mWcm-2): {self.power}\n\nVoltage(V)   Current (A)"
         _cellName = self.cellName
@@ -53,3 +57,5 @@ class DataSaver(QRunnable):
 
         _path = self.dataSavePath+f"\\{_cellName}.csv"
         np.savetxt(_path, self.dataArray, delimiter='   ', header=_header, comments='', fmt='%.5e')
+
+        self.mutexFileSaving.unlock()
