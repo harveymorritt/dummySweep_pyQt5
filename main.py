@@ -1,7 +1,6 @@
 import sys
 import time
 import os
-import re
 import json
 
 import numpy as np
@@ -13,235 +12,10 @@ from datetime import datetime
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
-
-
-class MeasurementHandler(QObject):
-    sendVocValueSignal = pyqtSignal(float)
-    sendSweepPointSignal = pyqtSignal(np.ndarray)
-    
-    sweepSetStartedSingal = pyqtSignal()     # Measurement is active.
-    finaliseSweepArraySignal = pyqtSignal()  # A sweep has finished, array can be sent for analysis.
-    sweepSetFinishedSignal = pyqtSignal()    # Measurement is no longer active.
-    abortMeasurementSignal = pyqtSignal()    # When the sweep has been aborted succesfully
-    
-    measurementVOCStartedSignal = pyqtSignal()
-    measurementVOCFinishedSignal = pyqtSignal()
-    sendConsoleUpdateSignal = pyqtSignal(str)
-    sendStatusUpdateSignal = pyqtSignal(str)
-
-    def __init__(self, mutexMeasurement):
-        super().__init__()
-        self.mutexMeasurement = mutexMeasurement
-        
-        self.validState = True
-        self.measurementValid = True
-        self.measurementConsent = False
-
-        self.sendConsoleUpdateSignal.emit("Keithley 2450 Initilised")
-
-    @pyqtSlot()
-    def abortMeasurement(self):
-        self.measurementConsent = False
-
-        self.sendConsoleUpdateSignal.emit("Sweep Abort Command Registered")
-        self.sendStatusUpdateSignal.emit("Aborting Measurement...")
-
-    @pyqtSlot()
-    def measureVOC(self):
-        self.sendConsoleUpdateSignal.emit("Voc Measurement Started")
-        self.measurementVOCStartedSignal.emit()
-        if self.validState:
-            _dataPoint = np.round(0.6+((1.05-0.6)*np.random.rand()), 3)
-            self.sendVocValueSignal.emit(_dataPoint)
-        else:
-            pass
-            ### Return message measurement not being valid ###
-        self.measurementVOCFinishedSignal.emit()
-        self.sendConsoleUpdateSignal.emit(f"Voc Measurement Finished\nValue: {_dataPoint:.3f} V")
-
-    @pyqtSlot(np.ndarray)
-    def measureSweep(self, sweepSettings):
-        self.mutexMeasurement.lock()
-
-        _sweepSettings = sweepSettings
-        _startVoltage = _sweepSettings[0, 0]
-        _endVoltage = _sweepSettings[0, 1]
-        _repeats = int(_sweepSettings[0, 2])
-        _scanRate = _sweepSettings[0, 3]
-        
-        _n = 1.5
-        _k = 1.38e-23
-        _T = 300
-        _I0 = 1e-12
-        _q = 1.6e-19
-
-        if self.measurementValid:
-            self.measurementConsent = True
-            self.sweepSetStartedSingal.emit()
-            
-            for _sweepNumber in range(1, _repeats+1):
-                
-                # Only send messages if measurement has consent
-                if self.measurementConsent:
-                    _consoleMessage = f"Measuring Sweep ({_sweepNumber} of {_repeats})"
-                    self.sendConsoleUpdateSignal.emit(_consoleMessage)
-                    self.sendStatusUpdateSignal.emit(_consoleMessage)
-                
-                _sweepPoint = np.empty((1, 2))
-                
-                _yAxisShift = np.round(0.05+((0.25-0.05)*np.random.rand()), 3)
-                _measurementPoints = np.linspace(_startVoltage, _endVoltage, num=250)
-
-                for _voltagePoint in _measurementPoints:
-                    
-                    if self.measurementConsent:
-
-                        _sleepTime = 0.045+(0.055-0.045)*np.random.rand()
-                        time.sleep(_sleepTime)
-
-                        _current = _I0*(np.exp((_q * _voltagePoint)/(_n*_k*_T)) - 1)
-
-                        _currentError = -0.005+(0.015+0.005)*np.random.rand()
-
-                        _sweepPoint[0, 0] = _voltagePoint
-                        _sweepPoint[0, 1] = _current - _yAxisShift + _currentError
-                        
-                        self.sendSweepPointSignal.emit(_sweepPoint.copy()) # .copy() otherwise the for loop "catches up" with the emit signal, and you end up writing over the data being emitted.    
-                                
-                # Only send finaliseSweepArraySignal IF the program finished the loop with measurement consent
-                if self.measurementConsent: 
-                    self.sendConsoleUpdateSignal.emit(f"Sweep Finished ({_sweepNumber} of {_repeats})")
-                    self.finaliseSweepArraySignal.emit()
-            
-            # Only send measurement finished if there is measurement consent
-            if self.measurementConsent:
-                self.sweepSetFinishedSignal.emit()
-            else:
-                self.abortMeasurementSignal.emit()
-        
-        else:
-            pass
-            # message about not in valid state
-        self.mutexMeasurement.unlock()
-
-
-
-class DataHandler(QObject):
-    updateGraphSignal = pyqtSignal(np.ndarray)
-    sendConsoleUpdateSignal = pyqtSignal(str)
-    sendStatusUpdateSignal = pyqtSignal(str)
-    sendDataArrayForSavingSingal = pyqtSignal(np.ndarray)
-
-    def __init__(self):
-        super().__init__()
-        
-        self.workingArray = []
-
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.sendUpdateGraphSignal, Qt.QueuedConnection)
-
-    @pyqtSlot(np.ndarray)
-    def buildArrayFromSweepPoints(self, receivedSweepPoint):
-        if not self.timer.isActive():
-            self.timer.start(333)
-        
-        self.workingArray.append(receivedSweepPoint)
-    
-    @pyqtSlot()
-    def finaliseArray(self):
-        self.timer.stop()
-
-        _measurementArray = np.vstack(self.workingArray)
-        
-        self.updateGraphSignal.emit(_measurementArray)
-        self.sendDataArrayForSavingSingal.emit(_measurementArray)
-
-        self.workingArray = []
-        self.sendConsoleUpdateSignal.emit("Sweep Data Finalised")
-    
-    @pyqtSlot()
-    def abortMeasurement(self):
-        self.workingArray = []
-
-        # The console and status are updated from "aborting" to "aborted" ONLY once the measurement thread has cleared the working array, which only happens if the main sweep loop in the meausrement thread is exited.
-        self.sendConsoleUpdateSignal.emit("Measurement Aborted Successfully")
-        self.sendStatusUpdateSignal.emit("Measurement Aborted. Ready to measure.")
-
-    @pyqtSlot()
-    def sendUpdateGraphSignal(self):
-        # It is possible for sendUpdateGraphSignal() to be queued by the self.timer.timeout event AS finaliseArray() is running, resulting the working array being cleared before sendUpdateGraphSignal() runs.
-        # We can never be sure there isn't a signal emission already in the event queue waiting to be processed which will call a method to access self.workingArray AFTER it has been cleared by finaliseArray().
-        # Hence, we check if there is valid data to display, before sending it to the Main GUI Thread.
-        if self.workingArray:
-            _workingArray = np.vstack(self.workingArray)
-            self.updateGraphSignal.emit(_workingArray)
-
-
-
-class analysisHandler(QObject):
-    def __init__(self):
-        super().__init__()
-        self.cellArea = 0
-        self.PowerIn = 0
-    
-    @pyqtSlot(np.ndarray)
-    def updateAnalysisValues(self):
-        pass
-
-
-
-class DataSaver(QRunnable):
-    def __init__(self, dataArray, sweepSettings, analysisSettings, cellName, dataSavePath):
-        super().__init__()
-        self.dataArray = dataArray
-        self.sweepSettings = sweepSettings
-        self.analysisSettings = analysisSettings
-        self.cellName = cellName
-        self.dataSavePath = dataSavePath
-
-        self.startVoltage = self.sweepSettings[0, 0]
-        self.endVoltage = self.sweepSettings[0, 1]
-        self.scanRate = self.sweepSettings[0, 2]
-
-        self.cellArea = self.analysisSettings[0, 0]
-        self.power = self.analysisSettings[0, 1]
-
-        if not self.cellName:
-            self.cellName = "DEFAULT"
-
-    def run(self):
-
-        _header = f"Sweep Settings:\nStart Voltage (V): {self.startVoltage}\nEnd Voltage (V): {self.endVoltage}\nScan Rate (mV/s): {self.scanRate}\n\nAnalysis Variables:\nCell Area(cm2): {self.cellArea}\nPower (mWcm-2): {self.power}\n\nVoltage(V)   Current (A)"
-        _cellName = self.cellName
-
-        _pattern = re.compile(rf"{re.escape(_cellName)}(?:_(\d+))?.*$")
-        _workingFolderPath = self.dataSavePath
-
-        # Check if files saved with same name
-        _highestNumFound = 0
-        for _fileName in os.listdir(_workingFolderPath):
-            _match = _pattern.match(_fileName)
-
-            # If files with same name, check for number
-            if _match:
-                _matchedNumber = _match.group(1)
-
-                # If it has a number, keep track of the highest number found
-                if _matchedNumber:
-                    _num = int(_matchedNumber)
-                    _highestNumFound = max(_highestNumFound, _num)
-        
-        # If no number found, save file as "file number 1", otherwise increment
-        if _highestNumFound == 0:
-            _cellName = _cellName + "_1"
-        else:
-            _nextNum = _highestNumFound + 1
-            _cellName = _cellName + "_" + str(_nextNum)
-
-        _path = self.dataSavePath+f"\\{_cellName}.csv"
-        np.savetxt(_path, self.dataArray, delimiter='   ', header=_header, comments='', fmt='%.5e')
-
-
+from threaded_objects.instruments.measurement_handler_dummyInstrument import MeasurementHandler
+from threaded_objects.data_handler import DataHandler
+from threaded_objects.analysis_handler import AnalysisHandler
+from threaded_objects.data_saver import DataSaver
 
 class MainWindow(QMainWindow):
     startSweepMeasurementSignal = pyqtSignal(np.ndarray)
@@ -514,7 +288,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.mainWidget)
         self.show()
 
-    def saveProgramSettings(self):
+    def saveProgramSettings(self, _savePath="programSettings.json"):
 
         # Instrument Settings
         _terminalSetting = self.inputTerminalSettings.currentText()
@@ -557,7 +331,7 @@ class MainWindow(QMainWindow):
             }
         }
 
-        with open("programSettings.json", "w") as file:
+        with open(_savePath, "w") as file:
             json.dump(_settings, file, indent=4)
 
     def loadProgramSettings(self):
