@@ -2,7 +2,7 @@ import time
 import numpy as np
 from PyQt5.QtCore import *
 
-import instruments.dummyInstrument as inst
+from .instruments import dummyInstrument as inst
 
 class MeasurementHandler(QObject):
     sendVocValueSignal = pyqtSignal(float)
@@ -26,14 +26,11 @@ class MeasurementHandler(QObject):
 
         if _initilised:
             self.validState = True
-            self.measurementValid = True
             self.measurementConsent = False
 
-            print(_message)
             self.sendConsoleUpdateSignal.emit(_message)
         else:
             self.validState = False
-            self.measurementValid = False
             self.measurementConsent = False
         
             self.sendConsoleUpdateSignal.emit(_message)
@@ -50,7 +47,7 @@ class MeasurementHandler(QObject):
         self.sendConsoleUpdateSignal.emit("Voc Measurement Started")
         self.measurementVOCStartedSignal.emit()
         if self.validState:
-            _dataPoint = np.round(0.6+((1.05-0.6)*np.random.rand()), 3)
+            _dataPoint = inst.measureVOC()
             self.sendVocValueSignal.emit(_dataPoint)
         else:
             pass
@@ -68,13 +65,7 @@ class MeasurementHandler(QObject):
         _repeats = int(_sweepSettings[0, 2])
         _scanRate = _sweepSettings[0, 3]
         
-        _n = 1.5
-        _k = 1.38e-23
-        _T = 300
-        _I0 = 1e-12
-        _q = 1.6e-19
-
-        if self.measurementValid:
+        if self.validState:
             self.measurementConsent = True
             self.sweepSetStartedSingal.emit()
             
@@ -88,22 +79,16 @@ class MeasurementHandler(QObject):
                 
                 _sweepPoint = np.empty((1, 2))
                 
-                _yAxisShift = np.round(0.05+((0.25-0.05)*np.random.rand()), 3)
                 _measurementPoints = np.linspace(_startVoltage, _endVoltage, num=250)
 
                 for _voltagePoint in _measurementPoints:
                     
                     if self.measurementConsent:
 
-                        _sleepTime = 0.045+(0.055-0.045)*np.random.rand()
-                        time.sleep(_sleepTime)
+                        _voltage, _current = inst.measurePoint(_voltagePoint)
 
-                        _current = _I0*(np.exp((_q * _voltagePoint)/(_n*_k*_T)) - 1)
-
-                        _currentError = -0.005+(0.015+0.005)*np.random.rand()
-
-                        _sweepPoint[0, 0] = _voltagePoint
-                        _sweepPoint[0, 1] = _current - _yAxisShift + _currentError
+                        _sweepPoint[0, 0] = _voltage
+                        _sweepPoint[0, 1] = _current
                         
                         self.sendSweepPointSignal.emit(_sweepPoint.copy()) # .copy() otherwise the for loop "catches up" with the emit signal, and you end up writing over the data being emitted.    
                                 
