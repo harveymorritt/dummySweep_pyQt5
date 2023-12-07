@@ -12,7 +12,7 @@ from datetime import datetime
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
-from threaded_objects.instruments.measurement_handler_dummyInstrument import MeasurementHandler
+from threaded_objects.measurement_handler import MeasurementHandler
 from threaded_objects.data_handler import DataHandler
 from threaded_objects.analysis_handler import AnalysisHandler
 from threaded_objects.data_saver import DataSaver

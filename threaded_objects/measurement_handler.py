@@ -2,6 +2,8 @@ import time
 import numpy as np
 from PyQt5.QtCore import *
 
+import instruments.dummyInstrument as inst
+
 class MeasurementHandler(QObject):
     sendVocValueSignal = pyqtSignal(float)
     sendSweepPointSignal = pyqtSignal(np.ndarray)
@@ -20,11 +22,21 @@ class MeasurementHandler(QObject):
         super().__init__()
         self.mutexMeasurement = mutexMeasurement
         
-        self.validState = True
-        self.measurementValid = True
-        self.measurementConsent = False
+        _initilised, _message = inst.initilise()
 
-        self.sendConsoleUpdateSignal.emit("Keithley 2450 Initilised")
+        if _initilised:
+            self.validState = True
+            self.measurementValid = True
+            self.measurementConsent = False
+
+            print(_message)
+            self.sendConsoleUpdateSignal.emit(_message)
+        else:
+            self.validState = False
+            self.measurementValid = False
+            self.measurementConsent = False
+        
+            self.sendConsoleUpdateSignal.emit(_message)
 
     @pyqtSlot()
     def abortMeasurement(self):
