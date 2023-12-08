@@ -80,13 +80,11 @@ class MeasurementHandler(QObject):
                 _sweepPoint = np.empty((1, 2))
                 
                 _measurementPoints = np.linspace(_startVoltage, _endVoltage, num=250)
-
                 for _voltagePoint in _measurementPoints:
                     
                     if self.measurementConsent:
 
                         _voltage, _current = inst.measurePoint(_voltagePoint)
-
                         _sweepPoint[0, 0] = _voltage
                         _sweepPoint[0, 1] = _current
                         

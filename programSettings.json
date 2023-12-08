@@ -1,7 +1,7 @@
 {
     "Instrument Settings": {
-        "Terminal Setting": "Four Wire",
-        "Panel Setting": "Front Banana Connection"
+        "Terminal Setting": "Two Wire",
+        "Panel Setting": "Rear Triaxial Connection"
     },
     "Sweep Settings": {
         "Start Voltage": 1.05,
