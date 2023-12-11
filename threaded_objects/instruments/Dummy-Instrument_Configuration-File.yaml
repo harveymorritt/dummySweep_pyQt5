@@ -1,0 +1,11 @@
+# "terminal" controls if the instrument executes a four or two wire wire measurement.
+# The valid options are "two" and "four".
+
+# "panel" controls if the front or rear connections of the Keithley 2450 are used.
+# The valid options are "front" and "rear".
+
+# You must type the setting EXACTLY as it is written in the valid options, without the quotation marks.
+# If an invalid setting is entered, the default values of "two" and "front" will be used. 
+
+panel: front
+terminal: two
