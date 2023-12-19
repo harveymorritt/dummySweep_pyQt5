@@ -5,7 +5,7 @@
 # The valid options are "front" and "rear".
 
 # You must type the setting EXACTLY as it is written in the valid options, without the quotation marks.
-# If an invalid setting is entered, the default values of "two" and "front" will be used. 
+# If an invalid setting is entered, the default values of "front" and "two" will be used.
 
 panel: front
 terminal: two

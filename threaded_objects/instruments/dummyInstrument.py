@@ -21,11 +21,30 @@ def getConfigData():
     Set _configDefaultSettings to the default settings of the instrument. Any instrument variables (front or back connections, four or two wire, screen brightness, audio active, e.t.c.) should be set here.
     These are the default settings that will be used if no configuration file is found, or if the values inside the configuration file are invalid (user set them wrong).
 
-    User inputs are checked to see if they are allowed. For example, a "terminal" settings could control if a two-wire of four-wire measurement is executed, depending on if this is set as "two" or "four".
+    Values read from the configuration file are checked against a reference which holds all allowed values, to see if they are valid inputs. 
+    For example, a "terminal" settings could control if a two-wire of four-wire measurement is executed, depending on if this is set as "two" or "four".
     If the user sets anything other than "two" or "four" by mistake, the program would catch this and set the configuration file used to the default values to prevent issues in the instrument initialization.
-    As such, it is extreamly important that the default values are tested extensively as these provide a saftey net.
-    It is also important that the user knows if the default values are being used, if they typed "fuor" instead of "four", the default value of "two" would be taken (may be different for your code).
-    Naturally, this could cause issues if the user did not know about it. Hence, the initilization values used are printed in the console (TO DO: raise a warning popup when an invalid value is detected).
+    As such, it is extreamly important that the allowed values are tested extensively, in every possible configuration.
+    It is also important that the user knows if the default values are being used, in our example below, if they typed "fuor" instead of "four" for the terminal settings, the default value of "two" would be taken.
+    Naturally, this could cause issues if the user did not know. Hence, the initilization values used are printed in the console (TO DO: raise a warning popup when an invalid value is detected).
+
+    Set _configAllowedValues to hold the allowed values. The keys of this dictionary should exactly match the key used to access the values in _configDefault. For example, if _configDefault is set as:
+    
+    _configDefault = {
+        "terminal": "two",
+        "panel": "front",
+        "brightness": "100",
+        "audio_On": "false"
+    }
+
+    Then _configAllowedValues could be set as:
+    
+    _configAllowedValues = {
+        "terminal": ("two", "four"),
+        "panel": ("front", "rear"),
+        "brightness": ("100", "75", "50", "25", "0"),
+        "audio_On": ("true", "false")
+    }
     
     It would be possible and easier for the lab-user to configure the instrument settings from the GUI. However, for every instrument, a slightly different GUI would be needed.
     One of the core principles of the program is that to change the instrument used only one file (this one) should be edited.
@@ -41,7 +60,7 @@ def getConfigData():
     # The default instrument settings. Loaded if no configuration file is found, or if the configuration file contains a value that is not valid.
     _configDefault = {
         "terminal": "two", # Options: "two", "four"
-        "panel": "front"  # Options: "front", "rear"
+        "panel": "front"   # Options: "front", "rear"
     }
 
     # The allowed values for each setting.
@@ -106,7 +125,7 @@ def getConfigData():
     
     return _dictionaryToReturn, _returnMessage
 
-def initilise():
+def initilise(configSettings):
     """
     Instrument Initialisation
 
@@ -133,6 +152,7 @@ def initilise():
     ### INITIALISATION CODE HERE ###
     _instrumentName = "Dummy Instrument"
     _failMessages = ""
+
     _initialized = True
     ### END ###
 
